@@ -9,113 +9,126 @@ import { getUser } from "@/lib/auth";
 export async function GET(req) {
   try {
     const caller = getUser(req);
-    if (!caller || !["super_admin","manager"].includes(caller.role)) {
-      return Response.json({ error: "Forbidden" }, { status: 403 });
-    }
-
+    if (!caller) return Response.json({ error:"Unauthorized" }, { status:401 });
     await connectDB();
 
-    // Lead conversion stats
-    const totalLeads = await Lead.countDocuments();
-    const wonLeads   = await Lead.countDocuments({ status: "won" });
-    const lostLeads  = await Lead.countDocuments({ status: "lost" });
-    const conversionRate = totalLeads ? Math.round((wonLeads / totalLeads) * 100) : 0;
+    const { searchParams } = new URL(req.url);
+    const type = searchParams.get("type") || "summary";
 
-    // Revenue stats
-    const payments   = await Payment.find();
-    const totalRevenue  = payments.reduce((s,p) => s + (p.paidAmount||0), 0);
-    const pendingRevenue= payments.reduce((s,p) => s + ((p.totalAmount||0) - (p.paidAmount||0)), 0);
+    // ── Sales Report (CSV download data) ──────────
+    if (type === "sales_csv") {
+      const leads = await Lead.find()
+        .populate("assignedSales",    "name email")
+        .populate("assignedDesigner", "name")
+        .sort({ createdAt:-1 });
 
-    // Lead source breakdown
-    const leadSources = await Lead.aggregate([
-      { $group: { _id: "$leadSource", count: { $sum: 1 } } },
-      { $sort:  { count: -1 } }
+      const quotes   = await Quote.find({ status:"accepted" });
+      const payments = await Payment.find();
+
+      const rows = leads.map(l => {
+        const quote   = quotes.find(q => (q.projectId?.toString() === l._id?.toString()));
+        const paid    = payments
+          .filter(p => p.customerId?.toString() === l.customerId?.toString())
+          .reduce((s,p) => s+(p.amount||0), 0);
+        return {
+          customerName:     l.customerName,
+          phone:            l.phone,
+          email:            l.email || "",
+          status:           l.status,
+          source:           l.leadSource,
+          assignedSales:    l.assignedSales?.name || "",
+          assignedDesigner: l.assignedDesigner?.name || "",
+          budget:           l.budget || 0,
+          quoteAmount:      quote?.totalAmount || 0,
+          paidAmount:       paid,
+          balance:          (quote?.totalAmount||0) - paid,
+          createdAt:        new Date(l.createdAt).toLocaleDateString("en-IN"),
+        };
+      });
+
+      return Response.json({ rows });
+    }
+
+    // ── Summary report ─────────────────────────────
+    const [leads, projects, quotes, payments, users] = await Promise.all([
+      Lead.find().populate("assignedSales","name"),
+      Project.find(),
+      Quote.find({ status:"accepted" }),
+      Payment.find().populate("recordedBy","name"),
+      User.find({ role:{ $in:["sales","designer"] } }),
     ]);
 
-    // Monthly leads (last 6 months)
-    const sixMonthsAgo = new Date();
-    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    const totalRevenue  = payments.reduce((s,p) => s+(p.amount||0), 0);
+    const conversionRate = leads.length
+      ? Math.round((leads.filter(l=>l.status==="won").length / leads.length) * 100)
+      : 0;
 
-    const monthlyLeads = await Lead.aggregate([
-      { $match: { createdAt: { $gte: sixMonthsAgo } } },
-      {
-        $group: {
-          _id: {
-            month: { $month: "$createdAt" },
-            year:  { $year:  "$createdAt" },
-          },
-          count: { $sum: 1 },
-        }
-      },
-      { $sort: { "_id.year": 1, "_id.month": 1 } }
-    ]);
-
-    // Top sales performers
-    const salesPerformance = await Lead.aggregate([
-      { $match: { status: "won", assignedSales: { $ne: null } } },
-      { $group: { _id: "$assignedSales", wonCount: { $sum: 1 } } },
-      { $sort: { wonCount: -1 } },
-      { $limit: 5 },
-      {
-        $lookup: {
-          from: "users",
-          localField: "_id",
-          foreignField: "_id",
-          as: "user",
-        }
-      },
-      { $unwind: "$user" },
-      { $project: { name: "$user.name", wonCount: 1 } }
-    ]);
+    // Sales performance
+    const salesPerf = users
+      .filter(u => u.role === "sales")
+      .map(u => {
+        const myLeads = leads.filter(l => l.assignedSales?._id?.toString() === u._id.toString());
+        const myWon   = myLeads.filter(l => l.status==="won");
+        const myPay   = payments.filter(p => p.recordedBy?._id?.toString() === u._id.toString());
+        return {
+          name:       u.name,
+          leads:      myLeads.length,
+          won:        myWon.length,
+          conversion: myLeads.length ? Math.round((myWon.length/myLeads.length)*100) : 0,
+          revenue:    myPay.reduce((s,p)=>s+(p.amount||0),0),
+        };
+      });
 
     // Designer workload
-    const designerWorkload = await Project.aggregate([
-      { $match: { status: { $ne: "completed" }, designerId: { $ne: null } } },
-      { $group: { _id: "$designerId", activeProjects: { $sum: 1 } } },
-      { $sort: { activeProjects: -1 } },
-      {
-        $lookup: {
-          from: "users",
-          localField: "_id",
-          foreignField: "_id",
-          as: "user",
-        }
-      },
-      { $unwind: "$user" },
-      { $project: { name: "$user.name", activeProjects: 1 } }
-    ]);
+    const designerPerf = users
+      .filter(u => u.role === "designer")
+      .map(u => {
+        const myLeads    = leads.filter(l => l.assignedDesigner?._id?.toString() === u._id.toString() || l.assignedDesigner?.toString() === u._id.toString());
+        const myProjects = projects.filter(p => p.designerId?.toString() === u._id.toString());
+        return {
+          name:     u.name,
+          leads:    myLeads.length,
+          projects: myProjects.length,
+          active:   myProjects.filter(p=>p.status!=="completed").length,
+          completed:myProjects.filter(p=>p.status==="completed").length,
+        };
+      });
 
-    // Project status breakdown
-    const projectStats = await Project.aggregate([
-      { $group: { _id: "$status", count: { $sum: 1 } } }
-    ]);
-
-    // Quote stats
-    const quoteStats = await Quote.aggregate([
-      { $group: { _id: "$status", count: { $sum: 1 } } }
-    ]);
-
-    return Response.json({
-      leads: {
-        total: totalLeads,
-        won:   wonLeads,
-        lost:  lostLeads,
-        conversionRate,
-        sources:  leadSources,
-        monthly:  monthlyLeads,
-      },
-      revenue: {
-        total:   totalRevenue,
-        pending: pendingRevenue,
-      },
-      salesPerformance,
-      designerWorkload,
-      projectStats,
-      quoteStats,
+    // Monthly payments for chart
+    const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const monthly = Array.from({length:6}, (_,i) => {
+      const d = new Date(); d.setMonth(d.getMonth()-(5-i));
+      return { month:MONTHS[d.getMonth()], monthNum:d.getMonth()+1, year:d.getFullYear(), revenue:0, leads:0 };
+    });
+    payments.forEach(p => {
+      const m = new Date(p.paymentDate).getMonth()+1;
+      const y = new Date(p.paymentDate).getFullYear();
+      const idx = monthly.findIndex(x=>x.monthNum===m && x.year===y);
+      if (idx>=0) monthly[idx].revenue += p.amount||0;
+    });
+    leads.forEach(l => {
+      const m = new Date(l.createdAt).getMonth()+1;
+      const y = new Date(l.createdAt).getFullYear();
+      const idx = monthly.findIndex(x=>x.monthNum===m && x.year===y);
+      if (idx>=0) monthly[idx].leads++;
     });
 
-  } catch (error) {
-    console.log("REPORTS ERROR:", error);
-    return Response.json({ error: error.message }, { status: 500 });
+    return Response.json({
+      summary: {
+        totalLeads:      leads.length,
+        wonLeads:        leads.filter(l=>l.status==="won").length,
+        lostLeads:       leads.filter(l=>l.status==="lost").length,
+        conversionRate,
+        totalRevenue,
+        totalProjects:   projects.length,
+        activeProjects:  projects.filter(p=>p.status!=="completed").length,
+      },
+      salesPerf,
+      designerPerf,
+      monthly,
+    });
+
+  } catch(e) {
+    return Response.json({ error:e.message }, { status:500 });
   }
 }

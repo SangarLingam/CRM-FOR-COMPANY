@@ -167,17 +167,64 @@ export default function LoginPage() {
               border:"1px solid #EAD6B8"
             }}
           >
-            <p className="text-xs font-semibold mb-1" style={{ color:"#8B6A50" }}>
-              🔑 Default Super Admin Login
-            </p>
 
-            <p className="text-xs" style={{ color:"#8B6A50" }}>
-              Email: admin@designcrm.com
-            </p>
+  <p className="text-sm font-semibold mb-3" style={{ color:"#8B6A50" }}>
+    🔑 Default Login Accounts
+  </p>
 
-            <p className="text-xs" style={{ color:"#8B6A50" }}>
-              Password: Admin@123
-            </p>
+  {/* Super Admin */}
+  <div className="mb-3">
+    <p className="text-xs font-semibold" style={{ color:"#8B6A50" }}>
+      Super Admin
+    </p>
+    <p className="text-xs" style={{ color:"#8B6A50" }}>
+      Email: admin@designcrm.com
+    </p>
+    <p className="text-xs">
+      Password: Admin@123
+    </p>
+  </div>
+
+  {/* Sales */}
+  <div className="mb-3">
+    <p className="text-xs font-semibold" style={{ color:"#8B6A50" }}>
+      Sales
+    </p>
+    <p className="text-xs">
+      Email: sales-1@designcrm.com
+    </p>
+    <p className="text-xs">
+      Password: Sales@1234
+    </p>
+  </div>
+
+  {/* Manager */}
+  <div className="mb-3">
+    <p className="text-xs font-semibold" style={{ color:"#8B6A50" }}>
+      Manager
+    </p>
+    <p className="text-xs">
+      Email: manager-1@designcrm.com
+    </p>
+    <p className="text-xs">
+      Password: Manger@123
+    </p>
+  </div>
+
+  {/* Designer */}
+  <div>
+    <p className="text-xs font-semibold" style={{ color:"#8B6A50" }}>
+      Designer
+    </p>
+    <p className="text-xs">
+      Email: designer-1@designcrm.com
+    </p>
+    <p className="text-xs">
+      Password: desinger@123
+    </p>
+  </div>
+
+
           </div>
 
         </div>

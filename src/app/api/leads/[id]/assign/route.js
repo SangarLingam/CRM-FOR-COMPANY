@@ -7,9 +7,9 @@ export async function PATCH(req, context) {
     const { id } = await context.params;
     const caller = getUser(req);
 
-    if (!caller || !["super_admin", "manager"].includes(caller.role)) {
-      return Response.json({ error: "Forbidden" }, { status: 403 });
-    }
+if (!["super_admin","manager","sales"].includes(caller.role)) {
+  return Response.json({ error:"Forbidden" }, { status:403 });
+}
 
     await connectDB();
     const { assignedSales, assignedDesigner } = await req.json();

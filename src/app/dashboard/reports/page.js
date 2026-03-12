@@ -1,135 +1,219 @@
 "use client";
-import { useEffect, useState } from "react";
-import { reportsAPI } from "@/lib/api";
+import { useEffect, useState, useCallback } from "react";
+import { useAuth } from "@/lib/auth-context";
+import { useToast } from "@/lib/toast-context";
 import { PageHeader, Spinner } from "@/components/ui";
-import { TrendingUp, DollarSign, Users, FolderOpen } from "lucide-react";
+import { Download, TrendingUp, Users, DollarSign, FolderOpen } from "lucide-react";
+import {
+  LineChart, Line, BarChart, Bar, XAxis, YAxis,
+  CartesianGrid, Tooltip, ResponsiveContainer, Cell
+} from "recharts";
 
-const fmt = n => new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:0}).format(n||0);
+const C = {
+  primary:"#C8974A", accent:"#D4A85A", gold:"#F0C060",
+  darkest:"#2C1A0E", darker:"#3D2410",
+  textFaint:"#C4A882", textLight:"#9C7A5A", cream:"#FAF7F4",
+};
 
-const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const fmt      = n => new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:0}).format(n||0);
+const fmtShort = n => n>=100000?`₹${(n/100000).toFixed(1)}L`:n>=1000?`₹${(n/1000).toFixed(0)}K`:`₹${n||0}`;
+
+function ChartTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-xl p-3 text-xs shadow-xl"
+      style={{ background:C.darkest, border:`1px solid ${C.primary}40`, color:"white" }}>
+      <p className="font-bold mb-1" style={{ color:C.gold }}>{label}</p>
+      {payload.map((p,i)=>(
+        <p key={i} style={{ color:C.accent }}>
+          {p.name}: {p.name==="Revenue" ? fmtShort(p.value) : p.value}
+        </p>
+      ))}
+    </div>
+  );
+}
 
 export default function ReportsPage() {
-  const [data,    setData]    = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState("");
+  const { user }     = useAuth();
+  const { addToast } = useToast();
+  const [data,       setData]       = useState(null);
+  const [loading,    setLoading]    = useState(true);
+  const [downloading,setDownloading]= useState(false);
 
-  useEffect(() => {
-    reportsAPI.getAll()
-      .then(setData)
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
+  const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
+
+  const fetchReports = useCallback(async () => {
+    try {
+      const res  = await fetch("/api/reports", { headers:{ Authorization:`Bearer ${token}` } });
+      const json = await res.json();
+      setData(json);
+    } catch(e) { addToast(e.message, "error"); }
+    finally { setLoading(false); }
   }, []);
 
+  useEffect(() => { fetchReports(); }, [fetchReports]);
+
+  // ── CSV Download ──────────────────────────────────
+  async function downloadSalesReport() {
+    setDownloading(true);
+    try {
+      const res  = await fetch("/api/reports?type=sales_csv", {
+        headers:{ Authorization:`Bearer ${token}` }
+      });
+      const json = await res.json();
+      const rows = json.rows || [];
+
+      const headers = [
+        "Customer Name","Phone","Email","Status","Lead Source",
+        "Assigned Sales","Assigned Designer","Budget","Quote Amount",
+        "Paid Amount","Balance","Created Date"
+      ];
+
+      const csvRows = [
+        headers.join(","),
+        ...rows.map(r => [
+          `"${r.customerName}"`, `"${r.phone}"`, `"${r.email}"`,
+          r.status, r.source, `"${r.assignedSales}"`, `"${r.assignedDesigner}"`,
+          r.budget, r.quoteAmount, r.paidAmount, r.balance, r.createdAt,
+        ].join(","))
+      ];
+
+      const blob = new Blob([csvRows.join("\n")], { type:"text/csv" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = `Sales_Report_${new Date().toLocaleDateString("en-IN").replace(/\//g,"-")}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      addToast("Sales report downloaded! 📊", "success");
+    } catch(e) {
+      addToast(e.message, "error");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   if (loading) return <div className="p-8"><Spinner /></div>;
-  if (error)   return <div className="p-8 text-red-500">Error: {error}</div>;
+  if (!data)   return <div className="p-8 text-red-500">Failed to load reports.</div>;
 
-  const projectStatusColor = {
-    planning:"#0ea5e9", design:"#8b5cf6",
-    in_progress:"#f97316", completed:"#10b981"
-  };
+  const { summary, salesPerf, designerPerf, monthly } = data;
 
-  const maxLeads = Math.max(...(data.leads.monthly.map(m=>m.count)||[1]));
+  const summaryCards = [
+    { label:"Total Leads",      value:summary.totalLeads,             icon:<TrendingUp size={18}/>, color:C.primary },
+    { label:"Won Leads",        value:summary.wonLeads,               icon:<Users size={18}/>,      color:"#2D7A4F" },
+    { label:"Conversion Rate",  value:`${summary.conversionRate}%`,   icon:<TrendingUp size={18}/>, color:C.accent },
+    { label:"Total Revenue",    value:fmt(summary.totalRevenue),      icon:<DollarSign size={18}/>, color:C.gold },
+    { label:"Active Projects",  value:summary.activeProjects,         icon:<FolderOpen size={18}/>, color:"#7B6BB5" },
+    { label:"Total Projects",   value:summary.totalProjects,          icon:<FolderOpen size={18}/>, color:C.darker.replace("#","") ? C.primary : C.primary },
+  ];
 
   return (
-    <div className="p-8 page-enter">
-      <PageHeader title="Reports" subtitle="Business performance overview"/>
+    <div className="p-8 page-enter" style={{ background:C.cream, minHeight:"100vh" }}>
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-2xl font-bold font-display" style={{ color:C.darkest }}>Reports</h1>
+          <p className="text-sm mt-0.5" style={{ color:C.textLight }}>Business analytics overview</p>
+        </div>
+        <button onClick={downloadSalesReport} disabled={downloading}
+          className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white transition-all hover:-translate-y-0.5 disabled:opacity-60"
+          style={{ background:`linear-gradient(135deg,${C.primary},${C.accent})`,
+            boxShadow:`0 4px 15px ${C.primary}50` }}>
+          <Download size={16}/>
+          {downloading ? "Downloading..." : "Download Sales Report"}
+        </button>
+      </div>
 
-      {/* Top Stats */}
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
-        {[
-          { label:"Total Leads",       value:data.leads.total,            icon:<TrendingUp size={20}/>,  color:"#f97316" },
-          { label:"Conversion Rate",   value:`${data.leads.conversionRate}%`, icon:<TrendingUp size={20}/>, color:"#10b981" },
-          { label:"Total Revenue",     value:fmt(data.revenue.total),     icon:<DollarSign size={20}/>,  color:"#8b5cf6" },
-          { label:"Pending Revenue",   value:fmt(data.revenue.pending),   icon:<DollarSign size={20}/>,  color:"#ef4444" },
-        ].map(s=>(
-          <div key={s.label} className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-slate-500 text-sm">{s.label}</p>
-                <p className="text-2xl font-bold font-display mt-1 text-slate-800">{s.value}</p>
-              </div>
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center"
-                style={{background:`${s.color}18`,color:s.color}}>
-                {s.icon}
-              </div>
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 xl:grid-cols-3 gap-4 mb-8">
+        {summaryCards.map(s=>(
+          <div key={s.label} className="rounded-2xl p-5 relative overflow-hidden"
+            style={{ background:`linear-gradient(135deg,${C.darkest},${C.darker})`,
+              border:`1px solid ${s.color}25` }}>
+            <div className="absolute -right-3 -top-3 w-14 h-14 rounded-full opacity-20"
+              style={{ background:s.color }}/>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3 text-white"
+              style={{ background:`linear-gradient(135deg,${s.color},${s.color}BB)` }}>
+              {s.icon}
             </div>
+            <p className="text-2xl font-bold font-display" style={{ color:"white" }}>{s.value}</p>
+            <p className="text-xs mt-0.5" style={{ color:`${s.color}CC` }}>{s.label}</p>
           </div>
         ))}
       </div>
 
+      {/* Charts */}
       <div className="grid lg:grid-cols-2 gap-6 mb-6">
-
-        {/* Monthly Leads Chart */}
-        <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
-          <h2 className="font-bold text-slate-800 font-display mb-5">Monthly Leads</h2>
-          {data.leads.monthly.length === 0 ? (
-            <p className="text-slate-400 text-sm text-center py-8">No data yet</p>
-          ) : (
-            <div className="flex items-end gap-2 h-40">
-              {data.leads.monthly.map((m,i)=>(
-                <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                  <span className="text-xs font-semibold text-slate-600">{m.count}</span>
-                  <div className="w-full rounded-t-lg transition-all"
-                    style={{
-                      height:`${Math.max((m.count/maxLeads)*120,8)}px`,
-                      background:"linear-gradient(180deg,#f97316,#ea6510)"
-                    }}/>
-                  <span className="text-xs text-slate-400">{MONTH_NAMES[m._id.month-1]}</span>
-                </div>
-              ))}
-            </div>
-          )}
+        {/* Revenue Chart */}
+        <div className="rounded-2xl p-6"
+          style={{ background:`linear-gradient(135deg,${C.darkest},${C.darker})`,
+            border:`1px solid ${C.primary}25` }}>
+          <h2 className="font-bold font-display mb-5" style={{ color:"white" }}>Monthly Revenue</h2>
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={monthly} margin={{ top:5, right:10, left:0, bottom:5 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,151,74,0.1)"/>
+              <XAxis dataKey="month" tick={{ fontSize:11, fill:C.textFaint }} axisLine={false} tickLine={false}/>
+              <YAxis tickFormatter={fmtShort} tick={{ fontSize:10, fill:C.textFaint }} axisLine={false} tickLine={false}/>
+              <Tooltip content={<ChartTooltip/>}/>
+              <Line type="monotone" dataKey="revenue" name="Revenue"
+                stroke={C.primary} strokeWidth={2.5}
+                dot={{ fill:C.primary, r:4, stroke:C.darker, strokeWidth:2 }}
+                activeDot={{ r:6, fill:C.gold }}/>
+            </LineChart>
+          </ResponsiveContainer>
         </div>
 
-        {/* Lead Sources */}
-        <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
-          <h2 className="font-bold text-slate-800 font-display mb-5">Lead Sources</h2>
-          {data.leads.sources.length === 0 ? (
-            <p className="text-slate-400 text-sm text-center py-8">No data yet</p>
-          ) : (
-            <div className="space-y-3">
-              {data.leads.sources.map((s,i)=>{
-                const colors=["#f97316","#8b5cf6","#0ea5e9","#10b981","#f59e0b"];
-                const total = data.leads.sources.reduce((sum,x)=>sum+x.count,0);
-                const pct   = Math.round((s.count/total)*100);
-                return (
-                  <div key={i}>
-                    <div className="flex justify-between text-sm mb-1">
-                      <span className="text-slate-600 capitalize">{s._id?.replace(/_/g," ")}</span>
-                      <span className="font-semibold text-slate-800">{s.count} ({pct}%)</span>
-                    </div>
-                    <div className="w-full bg-slate-100 rounded-full h-2">
-                      <div className="h-2 rounded-full" style={{width:`${pct}%`,background:colors[i%colors.length]}}/>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+        {/* Leads Chart */}
+        <div className="rounded-2xl p-6"
+          style={{ background:`linear-gradient(135deg,${C.darkest},${C.darker})`,
+            border:`1px solid ${C.primary}25` }}>
+          <h2 className="font-bold font-display mb-5" style={{ color:"white" }}>Monthly Leads</h2>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={monthly} margin={{ top:5, right:10, left:0, bottom:5 }}>
+              <defs>
+                <linearGradient id="rBarGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={C.primary}/>
+                  <stop offset="100%" stopColor={`${C.primary}40`}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(200,151,74,0.1)"/>
+              <XAxis dataKey="month" tick={{ fontSize:11, fill:C.textFaint }} axisLine={false} tickLine={false}/>
+              <YAxis tick={{ fontSize:10, fill:C.textFaint }} axisLine={false} tickLine={false}/>
+              <Tooltip content={<ChartTooltip/>}/>
+              <Bar dataKey="leads" name="Leads" radius={[6,6,0,0]} fill="url(#rBarGrad)"/>
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       </div>
 
-      <div className="grid lg:grid-cols-3 gap-6 mb-6">
-
-        {/* Sales Performance */}
-        <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
-          <h2 className="font-bold text-slate-800 font-display mb-5">
-            🏆 Top Sales
-          </h2>
-          {data.salesPerformance.length === 0 ? (
-            <p className="text-slate-400 text-sm text-center py-4">No data yet</p>
+      {/* Sales Performance */}
+      <div className="grid lg:grid-cols-2 gap-6">
+        <div className="rounded-2xl overflow-hidden"
+          style={{ background:`linear-gradient(135deg,${C.darkest},${C.darker})`,
+            border:`1px solid ${C.primary}25` }}>
+          <div className="px-6 py-4" style={{ borderBottom:`1px solid ${C.primary}20` }}>
+            <h2 className="font-bold font-display" style={{ color:"white" }}>Sales Performance</h2>
+          </div>
+          {salesPerf.length === 0 ? (
+            <p className="text-center py-8 text-sm" style={{ color:C.textFaint }}>No sales data</p>
           ) : (
-            <div className="space-y-3">
-              {data.salesPerformance.map((s,i)=>(
-                <div key={i} className="flex items-center gap-3">
-                  <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
-                    style={{background:i===0?"#f97316":i===1?"#8b5cf6":"#0ea5e9"}}>
-                    {i+1}
+            <div className="divide-y" style={{ borderColor:`${C.primary}12` }}>
+              {salesPerf.map((s,i)=>(
+                <div key={i} className="px-6 py-4 flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-sm flex-shrink-0"
+                    style={{ background:`linear-gradient(135deg,${C.primary},${C.accent})` }}>
+                    {s.name.charAt(0)}
                   </div>
                   <div className="flex-1">
-                    <p className="text-sm font-semibold text-slate-800">{s.name}</p>
-                    <p className="text-xs text-slate-400">{s.wonCount} leads won</p>
+                    <p className="font-semibold text-sm" style={{ color:"white" }}>{s.name}</p>
+                    <p className="text-xs" style={{ color:C.textFaint }}>
+                      {s.leads} leads · {s.won} won · {s.conversion}% conversion
+                    </p>
+                    <div className="w-full rounded-full mt-1.5" style={{ height:"4px", background:"rgba(255,255,255,0.08)" }}>
+                      <div className="rounded-full h-full"
+                        style={{ width:`${s.conversion}%`, background:`linear-gradient(90deg,${C.primary},${C.gold})` }}/>
+                    </div>
                   </div>
+                  <p className="text-sm font-bold flex-shrink-0" style={{ color:C.accent }}>{fmt(s.revenue)}</p>
                 </div>
               ))}
             </div>
@@ -137,82 +221,37 @@ export default function ReportsPage() {
         </div>
 
         {/* Designer Workload */}
-        <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
-          <h2 className="font-bold text-slate-800 font-display mb-5">
-            🎨 Designer Workload
-          </h2>
-          {data.designerWorkload.length === 0 ? (
-            <p className="text-slate-400 text-sm text-center py-4">No data yet</p>
+        <div className="rounded-2xl overflow-hidden"
+          style={{ background:`linear-gradient(135deg,${C.darkest},${C.darker})`,
+            border:`1px solid ${C.primary}25` }}>
+          <div className="px-6 py-4" style={{ borderBottom:`1px solid ${C.primary}20` }}>
+            <h2 className="font-bold font-display" style={{ color:"white" }}>Designer Workload</h2>
+          </div>
+          {designerPerf.length === 0 ? (
+            <p className="text-center py-8 text-sm" style={{ color:C.textFaint }}>No designer data</p>
           ) : (
-            <div className="space-y-3">
-              {data.designerWorkload.map((d,i)=>(
-                <div key={i} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold"
-                      style={{background:"#10b981"}}>
-                      {d.name?.charAt(0)}
-                    </div>
-                    <span className="text-sm font-medium text-slate-700">{d.name}</span>
+            <div className="divide-y" style={{ borderColor:`${C.primary}12` }}>
+              {designerPerf.map((d,i)=>(
+                <div key={i} className="px-6 py-4 flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-sm flex-shrink-0"
+                    style={{ background:"linear-gradient(135deg,#7B6BB5,#9B8BC5)" }}>
+                    {d.name.charAt(0)}
                   </div>
-                  <span className="text-xs bg-orange-50 text-orange-600 px-2.5 py-1 rounded-full font-semibold">
-                    {d.activeProjects} active
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Project Status */}
-        <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
-          <h2 className="font-bold text-slate-800 font-display mb-5">
-            📁 Project Status
-          </h2>
-          {data.projectStats.length === 0 ? (
-            <p className="text-slate-400 text-sm text-center py-4">No data yet</p>
-          ) : (
-            <div className="space-y-3">
-              {data.projectStats.map((p,i)=>(
-                <div key={i} className="flex items-center justify-between">
-                  <span className="text-sm text-slate-600 capitalize">{p._id?.replace(/_/g," ")}</span>
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full"
-                      style={{background:projectStatusColor[p._id]||"#94a3b8"}}/>
-                    <span className="text-sm font-semibold text-slate-800">{p.count}</span>
+                  <div className="flex-1">
+                    <p className="font-semibold text-sm" style={{ color:"white" }}>{d.name}</p>
+                    <p className="text-xs" style={{ color:C.textFaint }}>
+                      {d.leads} assigned · {d.projects} projects
+                    </p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-xs font-bold" style={{ color:"#2D7A4F" }}>✅ {d.completed}</p>
+                    <p className="text-xs" style={{ color:C.accent }}>🔨 {d.active} active</p>
                   </div>
                 </div>
               ))}
             </div>
           )}
         </div>
-      </div>
-
-      {/* Lead Conversion Summary */}
-      <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
-        <h2 className="font-bold text-slate-800 font-display mb-5">Lead Conversion Summary</h2>
-        <div className="grid grid-cols-3 gap-6 text-center">
-          {[
-            { label:"Total Leads",  value:data.leads.total, color:"#0ea5e9" },
-            { label:"Won",          value:data.leads.won,   color:"#10b981" },
-            { label:"Lost",         value:data.leads.lost,  color:"#ef4444" },
-          ].map(item=>(
-            <div key={item.label} className="p-4 rounded-2xl"
-              style={{background:`${item.color}10`}}>
-              <p className="text-3xl font-bold font-display" style={{color:item.color}}>{item.value}</p>
-              <p className="text-slate-500 text-sm mt-1">{item.label}</p>
-            </div>
-          ))}
-        </div>
-        <div className="mt-4 bg-slate-100 rounded-full h-3 overflow-hidden">
-          <div className="h-3 rounded-full transition-all"
-            style={{
-              width:`${data.leads.conversionRate}%`,
-              background:"linear-gradient(90deg,#10b981,#059669)"
-            }}/>
-        </div>
-        <p className="text-center text-sm text-slate-500 mt-2">
-          <span className="font-bold text-emerald-600">{data.leads.conversionRate}%</span> conversion rate
-        </p>
       </div>
     </div>
   );

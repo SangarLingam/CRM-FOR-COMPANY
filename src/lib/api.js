@@ -90,3 +90,19 @@ export const dashboardAPI = {
 export const reportsAPI = {
   getAll: () => apiFetch("/api/reports"),
 };
+
+
+
+// ── Settings API ───────────────────────────────
+export const settingsAPI = {
+  getProfile:      ()     => req("/api/settings/profile"),
+  updateProfile:   (body) => req("/api/settings/profile",  "PATCH", body),
+  updatePassword:  (body) => req("/api/settings/password", "PATCH", body),
+};
+
+// ── Tickets API ────────────────────────────────
+export const ticketsAPI = {
+  getAll:  ()           => req("/api/tickets"),
+  create:  (body)       => req("/api/tickets",     "POST",  body),
+  update:  (id, body)   => req(`/api/tickets/${id}`, "PATCH", body),
+};

@@ -4,67 +4,89 @@ import Customer from "@/models/Customer";
 import Project from "@/models/Project";
 import { getUser } from "@/lib/auth";
 
-const VALID = ["new","contacted","site_visit","quote_sent","won","lost"];
+// ── Allowed transitions per role ──────────────────────
+const ALLOWED = {
+  sales:       { new:["contacted"], contacted:["site_visit"] },
+  designer:    { site_visit:["won","lost"] },
+  manager:     { new:["contacted","site_visit","won","lost"], contacted:["site_visit","won","lost"], site_visit:["won","lost"] },
+  super_admin: { new:["contacted","site_visit","won","lost"], contacted:["site_visit","won","lost"], site_visit:["won","lost"] },
+};
 
 export async function PATCH(req, context) {
   try {
-    const { id } = await context.params;
     const caller = getUser(req);
-    if (!caller) return Response.json({ error: "Unauthorized" }, { status: 401 });
-
+    if (!caller) return Response.json({ error:"Unauthorized" }, { status:401 });
     await connectDB();
-    const { status } = await req.json();
-    console.log("STATUS UPDATE:", id, status);
 
-    if (!VALID.includes(status)) {
-      return Response.json({ error: "Invalid status" }, { status: 400 });
+    const { id }     = await context.params;
+    const { status } = await req.json();
+    const lead       = await Lead.findById(id);
+    if (!lead) return Response.json({ error:"Lead not found" }, { status:404 });
+
+    // ── Designer can only update their own assigned lead ──
+    if (caller.role === "designer") {
+      if (lead.assignedDesigner?.toString() !== caller.id) {
+        return Response.json({ error:"You can only update leads assigned to you" }, { status:403 });
+      }
     }
 
-    const lead = await Lead.findByIdAndUpdate(
-      id,
-      { status },
-      { new: true }
-    );
+    // ── Sales can only update leads they created ──
+    if (caller.role === "sales") {
+      if (lead.assignedSales?.toString() !== caller.id) {
+        return Response.json({ error:"You can only update your own leads" }, { status:403 });
+      }
+    }
 
-    if (!lead) return Response.json({ error: "Lead not found" }, { status: 404 });
+    // ── Check transition is allowed ──
+    const allowed = ALLOWED[caller.role]?.[lead.status] || [];
+    if (!allowed.includes(status)) {
+      return Response.json({
+        error:`${caller.role} cannot change status from "${lead.status}" to "${status}"`
+      }, { status:403 });
+    }
 
-    // Auto create Customer + Project when WON
+    lead.status = status;
+    lead.activityLog = lead.activityLog || [];
+    lead.activityLog.push({
+      action:    `Status changed to ${status}`,
+      doneByName: caller.name,
+      doneAt:    new Date(),
+    });
+
+    // ── Auto-create Customer + Project on Won ──
     if (status === "won") {
-      let customer = await Customer.findOne({ leadId: lead._id });
-
+      let customer = await Customer.findOne({ leadId:lead._id });
       if (!customer) {
         customer = await Customer.create({
           leadId:  lead._id,
           name:    lead.customerName,
           phone:   lead.phone,
-          email:   lead.email,
-          address: lead.address,
+          email:   lead.email    || "",
+          address: lead.address  || "",
         });
-        console.log("Customer created:", customer._id);
       }
-
-      const existingProject = await Project.findOne({ leadId: lead._id });
-      if (!existingProject) {
+      const existing = await Project.findOne({ leadId:lead._id });
+      if (!existing) {
         await Project.create({
-          customerId:  customer._id,
           leadId:      lead._id,
-          projectName: `${lead.customerName} - Interior Design`,
-          designerId:  lead.assignedDesigner || null,
+          customerId:  customer._id,
+          projectName: `${lead.customerName} - ${lead.projectType || "Interior"} Project`,
           status:      "planning",
+          designerId:  lead.assignedDesigner,
+          totalBudget: lead.budget || 0,
         });
-        console.log("Project created!");
       }
-
+      lead.customerId = customer._id;
       return Response.json({
-        lead,
-        message: "Lead won! Customer and Project created automatically ✅",
+        lead: await lead.save(),
+        message: "Lead marked as Won! 🎉 Customer & Project created automatically.",
       });
     }
 
-    return Response.json({ lead, message: "Status updated successfully" });
+    await lead.save();
+    return Response.json({ lead, message:`Status updated to ${status}` });
 
-  } catch (error) {
-    console.log("STATUS ERROR:", error);
-    return Response.json({ error: error.message }, { status: 500 });
+  } catch(e) {
+    return Response.json({ error:e.message }, { status:500 });
   }
 }
