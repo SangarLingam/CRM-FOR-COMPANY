@@ -185,6 +185,19 @@ export default function LoginPage() {
     </p>
   </div>
 
+{/* Manager */}
+  <div className="mb-3">
+    <p className="text-xs font-semibold" style={{ color:"#8B6A50" }}>
+      Manager
+    </p>
+    <p className="text-xs">
+      Email: manager-1@designcrm.com
+    </p>
+    <p className="text-xs">
+      Password: Manager@123
+    </p>
+  </div>
+
   {/* Sales */}
   <div className="mb-3">
     <p className="text-xs font-semibold" style={{ color:"#8B6A50" }}>
@@ -198,18 +211,7 @@ export default function LoginPage() {
     </p>
   </div>
 
-  {/* Manager */}
-  <div className="mb-3">
-    <p className="text-xs font-semibold" style={{ color:"#8B6A50" }}>
-      Manager
-    </p>
-    <p className="text-xs">
-      Email: manager-1@designcrm.com
-    </p>
-    <p className="text-xs">
-      Password: Manger@123
-    </p>
-  </div>
+  
 
   {/* Designer */}
   <div>
@@ -220,7 +222,7 @@ export default function LoginPage() {
       Email: designer-1@designcrm.com
     </p>
     <p className="text-xs">
-      Password: desinger@123
+      Password: Designer@123
     </p>
   </div>
 
